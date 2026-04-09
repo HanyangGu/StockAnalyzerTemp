@@ -1,5 +1,5 @@
 StockAnalyzer 开发报告
-本次 Session 主要更改概览
+针对于此临时版本
 
 架构代码重构
 原始单文件 app.py 拆分成多个独立模块，按 core/ analyzers/ scoring/ engine/ 四个文件夹组织

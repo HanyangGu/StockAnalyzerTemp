@@ -286,21 +286,23 @@ def render_sentiment_dropdown(data: dict):
     """
     Expandable Sentiment breakdown dropdown.
     Layout:
-      1. Overall signals
-      2. Analyst card + rating distribution + targets
-      3. News card + articles
+      1. News signals
+      2. Analyst card + signals + distribution + targets
+      3. Insider card + signals + transaction list
+      4. News card + articles
     """
     sent      = data.get("sentiment", {})
     breakdown = sent.get("breakdown", {})
     news      = breakdown.get("news",    {})
     analyst   = breakdown.get("analyst", {})
-    articles  = news.get("articles", [])
+    insider   = breakdown.get("insider", {})
+    articles  = news.get("articles",      [])
+    txns      = insider.get("transactions", [])
 
     if not sent:
         return
 
     def _score_card(col, label, score, direction):
-        """Renders a mini score card into a given column."""
         color   = get_score_color(score) if score is not None else "#888888"
         disp    = score if score is not None else "--"
         if score is None:
@@ -322,13 +324,14 @@ def render_sentiment_dropdown(data: dict):
 
     with st.expander("🗞️ Sentiment Breakdown"):
 
-        # -- 1. Overall signals --------------------------------
-        if sent.get("signals"):
-            st.markdown("**Sentiment Signals**")
-            for s in sent["signals"]:
+        # -- 1. News signals ----------------------------------
+        news_signals = news.get("signals", [])
+        if news_signals:
+            st.markdown("**News Signals**")
+            for s in news_signals:
                 st.markdown(f"- {s}")
 
-        # -- 2. Analyst section --------------------------------
+        # -- 2. Analyst section -------------------------------
         st.markdown("---")
         analyst_score = analyst.get("score") if analyst else None
         analyst_dir   = analyst.get("direction", "neutral") if analyst else "neutral"
@@ -338,6 +341,9 @@ def render_sentiment_dropdown(data: dict):
 
         with col_detail:
             if analyst and analyst.get("rating_count", 0) > 0:
+                for s in analyst.get("signals", []):
+                    st.markdown(f"- {s}")
+                st.markdown("")
                 summary = analyst.get("summary", {})
                 if summary:
                     sb = summary.get("strong_buy",  0)
@@ -351,7 +357,6 @@ def render_sentiment_dropdown(data: dict):
                     with c3: st.metric("Hold",        h)
                     with c4: st.metric("Sell",        s)
                     with c5: st.metric("Strong Sell", ss)
-
                 targets = analyst.get("targets", {})
                 if targets.get("mean"):
                     c1, c2, c3 = st.columns(3)
@@ -364,53 +369,87 @@ def render_sentiment_dropdown(data: dict):
             else:
                 st.caption("No analyst rating data available.")
 
-        # -- 3. News section -----------------------------------
+        # -- 3. Insider section -------------------------------
+        st.markdown("---")
+        insider_score = insider.get("score") if insider else None
+        insider_dir   = insider.get("direction", "neutral") if insider else "neutral"
+
+        col_card2, col_txns = st.columns([1, 2])
+        _score_card(col_card2, "👤 Insider", insider_score, insider_dir)
+
+        with col_txns:
+            if insider and insider.get("transaction_count", 0) > 0:
+                for s in insider.get("signals", []):
+                    st.markdown(f"- {s}")
+                st.markdown("")
+                if txns:
+                    st.markdown("**Transactions**")
+                    for t in txns:
+                        is_buy    = t.get("is_buy",   False)
+                        is_sell   = t.get("is_sell",  False)
+                        icon      = "✅" if is_buy else ("⚠️" if is_sell else "➡️")
+                        name      = t.get("insider",          "Unknown")
+                        title_t   = t.get("title",            "")
+                        txn_type  = t.get("transaction_type", "")
+                        shares    = t.get("shares",  0)
+                        value     = t.get("value",   0)
+                        date_str  = t.get("date_str", "")
+                        t_weight  = t.get("time_weight", 1.0)
+                        signal    = t.get("signal",   "neutral")
+                        strength  = t.get("strength", "weak")
+                        reason    = t.get("reason",   "")
+                        value_str  = f"USD {value:,.0f}" if value else "N/A"
+                        shares_str = f"{shares:,}" if shares else "N/A"
+                        st.markdown(
+                            f"<div style='margin-bottom:12px;'>"
+                            f"{icon} <b>{name}</b> — <span style='color:#aaa;font-size:12px;'>{title_t}</span><br>"
+                            f"<span style='font-size:12px;'>{txn_type} &nbsp;|&nbsp; {shares_str} shares &nbsp;|&nbsp; {value_str}</span><br>"
+                            f"<span style='color:#888;font-size:11px;'>{date_str} &nbsp;|&nbsp; Time weight: {t_weight} &nbsp;|&nbsp; Signal: {signal} ({strength})</span><br>"
+                            f"<span style='color:#aaa;font-size:11px;font-style:italic;'>{reason}</span>"
+                            f"</div>",
+                            unsafe_allow_html=True
+                        )
+            else:
+                st.caption("No insider transaction data available.")
+
+        # -- 4. News section ----------------------------------
         st.markdown("---")
         news_score = news.get("score", 50)
         news_dir   = news.get("direction", "neutral")
 
-        col_card2, col_articles = st.columns([1, 2])
-        _score_card(col_card2, "🗞️ News", news_score, news_dir)
+        col_card3, col_articles = st.columns([1, 2])
+        _score_card(col_card3, "🗞️ News", news_score, news_dir)
 
         with col_articles:
             if articles:
                 for a in articles:
                     relevance = a.get("relevance", "unrelated")
-                    sentiment = a.get("sentiment", "neutral")
-
+                    sentiment_a = a.get("sentiment", "neutral")
                     if relevance == "unrelated":
-                        icon    = "⬜"
-                        opacity = "0.35"
-                        rel_tag = " *(unrelated)*"
+                        icon, opacity, rel_tag = "⬜", "0.35", " *(unrelated)*"
                     elif relevance == "indirect":
-                        icon    = "↗️" if sentiment == "positive" else ("↘️" if sentiment == "negative" else "➡️")
-                        opacity = "0.75"
-                        rel_tag = " *(indirect)*"
+                        icon    = "↗️" if sentiment_a == "positive" else ("↘️" if sentiment_a == "negative" else "➡️")
+                        opacity, rel_tag = "0.75", " *(indirect)*"
                     else:
-                        icon    = "✅" if sentiment == "positive" else ("⚠️" if sentiment == "negative" else "➡️")
-                        opacity = "1.0"
-                        rel_tag = ""
-
-                    title  = a.get("title",       "")[:70]
-                    source = a.get("source",      "")
-                    impact = a.get("impact",      "normal")
-                    time_w = a.get("time_weight", 1.0)
-                    reason = a.get("reason",      "")
-
+                        icon    = "✅" if sentiment_a == "positive" else ("⚠️" if sentiment_a == "negative" else "➡️")
+                        opacity, rel_tag = "1.0", ""
+                    title_a = a.get("title",       "")[:70]
+                    source  = a.get("source",      "")
+                    impact  = a.get("impact",      "normal")
+                    time_w  = a.get("time_weight", 1.0)
+                    reason_a = a.get("reason",     "")
                     st.markdown(
                         f"<div style='opacity:{opacity};margin-bottom:10px;'>"
-                        f"{icon} <b>{title}</b>{rel_tag}<br>"
+                        f"{icon} <b>{title_a}</b>{rel_tag}<br>"
                         f"<span style='color:#888;font-size:11px;'>"
                         f"{source} &nbsp;|&nbsp; Impact: {impact} &nbsp;|&nbsp; Time weight: {time_w}"
                         f"</span><br>"
-                        f"<span style='color:#aaa;font-size:11px;font-style:italic;'>{reason}</span>"
+                        f"<span style='color:#aaa;font-size:11px;font-style:italic;'>{reason_a}</span>"
                         f"</div>",
                         unsafe_allow_html=True
                     )
             else:
                 st.caption("No news articles available.")
-
-
 
 def render_decision_panel(data: dict):
     """

@@ -4,31 +4,25 @@
 # Aggregates all sentiment sub-dimension scores into one
 # overall sentiment score (0-100).
 #
-# Current sub-dimensions and weights:
-#   News Sentiment     : 60%
-#   Analyst Ratings    : 40%
+# Current weights:
+#   News Sentiment   : 60%
+#   Analyst Ratings  : 25%
+#   Insider Trading  : 15%
 #
-# Future sub-dimensions:
-#   Insider Trading    : weight TBD
-#   Options Sentiment  : weight TBD
+# Future:
+#   Options Sentiment: TBD
 # ============================================================
 
-# ============================================================
-# Sub-dimension Weights
-# ============================================================
 WEIGHT_NEWS    = 0.60
-WEIGHT_ANALYST = 0.40
+WEIGHT_ANALYST = 0.25
+WEIGHT_INSIDER = 0.15
 
 # Future:
-# WEIGHT_NEWS    = 0.40
-# WEIGHT_ANALYST = 0.30
-# WEIGHT_INSIDER = 0.20
-# WEIGHT_OPTIONS = 0.10
+# WEIGHT_NEWS    = 0.45
+# WEIGHT_ANALYST = 0.20
+# WEIGHT_INSIDER = 0.15
+# WEIGHT_OPTIONS = 0.20
 
-
-# ============================================================
-# Verdict
-# ============================================================
 
 def get_sentiment_verdict(score: int) -> tuple:
     """Converts sentiment score to verdict label and emoji."""
@@ -44,17 +38,16 @@ def get_sentiment_verdict(score: int) -> tuple:
         return "Very Bearish Sentiment",  "🔴"
 
 
-# ============================================================
-# Aggregator
-# ============================================================
-
-def score_sentiment(news: dict, analyst: dict = None) -> dict:
+def score_sentiment(news: dict,
+                    analyst: dict = None,
+                    insider: dict = None) -> dict:
     """
     Aggregates all active sentiment sub-dimension scores.
 
     Args:
         news    : Result from analyzers/sentiment/news.py
-        analyst : Result from analyzers/sentiment/analyst.py (optional)
+        analyst : Result from analyzers/sentiment/analyst.py
+        insider : Result from analyzers/sentiment/insider.py
 
     Returns:
         {
@@ -62,27 +55,23 @@ def score_sentiment(news: dict, analyst: dict = None) -> dict:
           "verdict"  : str,
           "icon"     : emoji,
           "signals"  : [str],
-          "breakdown": {
-              "news":    { score, direction, article_count, signals },
-              "analyst": { score, direction, rating_count,  signals },
-          }
+          "breakdown": { news, analyst, insider }
         }
     """
     signals   = []
     breakdown = {}
 
-    # -- News Sentiment (60%) ---------------------------------
+    # -- News (60%) -------------------------------------------
     news_score = news.get("score", 50) if news else 50
     breakdown["news"] = {
         "score":         news_score,
-        "direction":     news.get("direction",     "neutral"),
-        "article_count": news.get("article_count", 0),
-        "articles":      news.get("articles",      []),
-        "signals":       news.get("signals",       []),
+        "direction":     news.get("direction",     "neutral") if news else "neutral",
+        "article_count": news.get("article_count", 0)        if news else 0,
+        "articles":      news.get("articles",      [])        if news else [],
+        "signals":       news.get("signals",       [])        if news else [],
     }
-    signals.extend(news.get("signals", []))
 
-    # -- Analyst Ratings (40%) --------------------------------
+    # -- Analyst (25%) ----------------------------------------
     analyst_score = analyst.get("score", 50) if analyst else 50
     breakdown["analyst"] = {
         "score":        analyst_score,
@@ -92,19 +81,34 @@ def score_sentiment(news: dict, analyst: dict = None) -> dict:
         "targets":      analyst.get("targets",      {})        if analyst else {},
         "signals":      analyst.get("signals",      [])        if analyst else [],
     }
-    if analyst:
-        signals.extend(analyst.get("signals", []))
+
+    # -- Insider (15%) ----------------------------------------
+    insider_score = insider.get("score", 50) if insider else 50
+    breakdown["insider"] = {
+        "score":             insider_score,
+        "direction":         insider.get("direction",         "neutral") if insider else "neutral",
+        "transaction_count": insider.get("transaction_count", 0)        if insider else 0,
+        "transactions":      insider.get("transactions",      [])        if insider else [],
+        "signals":           insider.get("signals",           [])        if insider else [],
+    }
 
     # -- Weighted aggregate -----------------------------------
-    if analyst:
-        overall_score = round(
-            news_score    * WEIGHT_NEWS +
-            analyst_score * WEIGHT_ANALYST
-        )
-    else:
-        # Redistribute analyst weight to news if unavailable
-        overall_score = news_score
+    active_weight = 0.0
+    weighted_sum  = 0.0
 
+    weighted_sum  += news_score    * WEIGHT_NEWS
+    active_weight += WEIGHT_NEWS
+
+    if analyst:
+        weighted_sum  += analyst_score * WEIGHT_ANALYST
+        active_weight += WEIGHT_ANALYST
+
+    if insider:
+        weighted_sum  += insider_score * WEIGHT_INSIDER
+        active_weight += WEIGHT_INSIDER
+
+    # Redistribute if some dimensions unavailable
+    overall_score = round(weighted_sum / active_weight) if active_weight > 0 else 50
     overall_score = max(0, min(100, overall_score))
     verdict, icon = get_sentiment_verdict(overall_score)
 

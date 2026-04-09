@@ -148,21 +148,38 @@ def _grade_to_score(grade: str) -> float:
 # ============================================================
 
 def _fetch_recommendations(ticker_symbol: str) -> pd.DataFrame:
-    """Fetches historical recommendations with primary/fallback windows."""
+    """
+    Fetches historical analyst upgrade/downgrade records.
+    yfinance 1.x: historical ratings live in upgrades_downgrades,
+    columns: Firm, ToGrade, FromGrade, Action (up/down/init/main).
+    Primary window: 6 months. Fallback: 12 months if < MIN_RATINGS.
+    """
     try:
         time.sleep(1)
-        recs = yf.Ticker(ticker_symbol).recommendations
-        if recs is None or recs.empty:
+        stock = yf.Ticker(ticker_symbol)
+
+        # yfinance 1.x uses upgrades_downgrades for historical records
+        recs = getattr(stock, "upgrades_downgrades", None)
+        if recs is None or (hasattr(recs, "empty") and recs.empty):
+            recs = getattr(stock, "recommendations", None)
+
+        if recs is None or (hasattr(recs, "empty") and recs.empty):
             return pd.DataFrame()
 
+        # Normalise index to UTC datetime
         recs.index = pd.to_datetime(recs.index, utc=True)
         recs = recs.sort_index(ascending=False)
 
+        # Normalise column names: "To Grade" -> "ToGrade" etc.
+        recs.columns = [c.strip().replace(" ", "") for c in recs.columns]
+
+        # Try primary window
         cutoff  = datetime.now(timezone.utc) - timedelta(days=PRIMARY_MONTHS * 30)
         primary = recs[recs.index >= cutoff]
         if len(primary) >= MIN_RATINGS:
             return primary
 
+        # Fallback to extended window
         cutoff = datetime.now(timezone.utc) - timedelta(days=FALLBACK_MONTHS * 30)
         return recs[recs.index >= cutoff]
 
@@ -299,15 +316,21 @@ def _score_distribution(summary: dict) -> tuple:
 
 def _score_momentum(recs: pd.DataFrame) -> tuple:
     """Rating momentum score (0-20 pts)."""
-    if recs.empty or "Action" not in recs.columns:
-        return 10, "Rating momentum: no action data ➡️"
+    if recs.empty:
+        return 10, "Rating momentum: no data ➡️"
+
+    action_col = next((c for c in ["Action", "action"]
+                       if c in recs.columns), None)
+    if not action_col:
+        return 10, "Rating momentum: no action column ➡️"
 
     cutoff  = datetime.now(timezone.utc) - timedelta(days=90)
     recent  = recs[recs.index >= cutoff]
 
-    ups   = len(recent[recent["Action"].str.lower() == "up"])
-    downs = len(recent[recent["Action"].str.lower() == "down"])
-    inits = len(recent[recent["Action"].str.lower() == "init"])
+    actions = recent[action_col].str.lower()
+    ups   = len(recent[actions == "up"])
+    downs = len(recent[actions == "down"])
+    inits = len(recent[actions == "init"])
     net   = ups - downs + (inits * 0.5)
 
     if net >= 3:
@@ -316,7 +339,7 @@ def _score_momentum(recs: pd.DataFrame) -> tuple:
     elif net >= 1:
         score, icon = 15, "✅"
         label = f"mild upgrade momentum ({ups} upgrades, {downs} downgrades)"
-    elif net == 0:
+    elif net >= -0.5:
         score, icon = 10, "➡️"
         label = f"neutral ({ups} upgrades, {downs} downgrades)"
     elif net >= -2:
@@ -348,11 +371,13 @@ def _score_price_target(targets: dict,
                 gap_score = pts
                 break
         score += gap_score
-        icon   = "✅" if gap_pct > 0.05 else ("⚠️" if gap_pct < -0.05 else "➡️")
-        sign   = "+" if gap_pct >= 0 else ""
+        icon      = "✅" if gap_pct > 0.05 else ("⚠️" if gap_pct < -0.05 else "➡️")
+        sign      = "+" if gap_pct >= 0 else ""
+        gap_str   = f"{sign}{round(gap_pct * 100, 1)}%"
+        mean_str  = f"USD {round(mean_t, 2)}"
+        price_str = f"USD {round(current_price, 2)}"
         signals.append(
-            f"Price target: mean ${round(mean_t, 2)} "
-            f"({sign}{round(gap_pct * 100, 1)}% vs current ${round(current_price, 2)}) {icon}"
+            f"Price target: mean {mean_str} ({gap_str} vs current {price_str}) {icon}"
         )
     else:
         signals.append("Price target: no data ➡️")
@@ -362,16 +387,16 @@ def _score_price_target(targets: dict,
         disp = (high_t - low_t) / low_t
         if disp < 0.15:
             d_score, d_icon = 10, "✅"
-            d_label = f"low dispersion (${round(low_t,0)}–${round(high_t,0)}) -- high agreement"
+            d_label = f"low dispersion (USD {round(low_t,0)}–{round(high_t,0)}) -- high agreement"
         elif disp < 0.35:
             d_score, d_icon = 6, "➡️"
-            d_label = f"moderate dispersion (${round(low_t,0)}–${round(high_t,0)})"
+            d_label = f"moderate dispersion (USD {round(low_t,0)}–{round(high_t,0)})"
         elif disp < 0.60:
             d_score, d_icon = 3, "⚠️"
-            d_label = f"high dispersion (${round(low_t,0)}–${round(high_t,0)}) -- analyst disagreement"
+            d_label = f"high dispersion (USD {round(low_t,0)}–{round(high_t,0)}) -- analyst disagreement"
         else:
             d_score, d_icon = 0, "⚠️"
-            d_label = f"very high dispersion (${round(low_t,0)}–${round(high_t,0)}) -- very uncertain"
+            d_label = f"very high dispersion (USD {round(low_t,0)}–{round(high_t,0)}) -- very uncertain"
         score += d_score
         signals.append(f"Target dispersion: {d_label} {d_icon}")
 
@@ -384,10 +409,12 @@ def _score_weighted_ratings(recs: pd.DataFrame,
     if recs.empty:
         return 10, "Weighted ratings: no data ➡️"
 
-    grade_col = next((c for c in ["To Grade", "toGrade", "Grade"]
+    grade_col = next((c for c in ["ToGrade", "To Grade", "toGrade", "Grade"]
                       if c in recs.columns), None)
     firm_col  = next((c for c in ["Firm", "firm"]
                       if c in recs.columns), None)
+    action_col = next((c for c in ["Action", "action"]
+                       if c in recs.columns), None)
 
     if not grade_col:
         return 10, "Weighted ratings: grade column not found ➡️"
@@ -399,7 +426,7 @@ def _score_weighted_ratings(recs: pd.DataFrame,
     for date, row in recs.iterrows():
         grade  = str(row.get(grade_col, ""))
         firm   = str(row.get(firm_col,  "Unknown")) if firm_col else "Unknown"
-        action = str(row.get("Action",  "")).lower()
+        action = str(row.get(action_col, "") if action_col else "").lower()
 
         g_score  = _grade_to_score(grade)
         t_weight = _analyst_time_weight(date)

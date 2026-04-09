@@ -40,6 +40,7 @@ from analyzers.technical import (
 from analyzers.fundamental import fetch_fundamental_data
 from analyzers.sentiment.news import fetch_news_sentiment
 from analyzers.sentiment.analyst import fetch_analyst_sentiment
+from analyzers.sentiment.insider import fetch_insider_sentiment
 from scoring.technical_scorer import (
     score_short_term,
     score_mid_term,
@@ -208,9 +209,11 @@ def run_analysis(company: str, backtest_date: str = None) -> dict:
         company_name  = price_data.get("name", ""),
     )
     analyst_data  = fetch_analyst_sentiment(ticker)
+    insider_data  = fetch_insider_sentiment(ticker)
     sentiment     = score_sentiment(
         news    = news_data,
         analyst = analyst_data,
+        insider = insider_data,
     )
 
     # Step 9: Composite score across all dimensions
